@@ -41,6 +41,19 @@ pipeline {
             }
         }
 
+        stage('Dependency Audit') {
+            // Advisory, not blocking: a real pip-audit run against this
+            // project's pinned versions currently surfaces dozens of known
+            // CVEs (torch, pillow, starlette, python-multipart...). Failing
+            // the build on every one of them would stop all delivery until a
+            // dedicated dependency-upgrade pass lands, which is out of scope
+            // here -- so this stage reports findings without gating the
+            // pipeline. Flip the `|| true` once that upgrade pass happens.
+            steps {
+                sh 'pip-audit -r requirements-dev.txt -r model/requirements.txt -r api/requirements.txt || true'
+            }
+        }
+
         stage('Unit Tests') {
             steps {
                 sh 'pytest tests/ -q --junitxml=test-results/junit.xml'

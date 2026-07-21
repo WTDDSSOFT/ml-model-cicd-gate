@@ -25,6 +25,12 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      - name: Dependency audit
+        # Advisory, not blocking -- see the matching Jenkinsfile stage
+        # comment for why this doesn't gate the build yet.
+        continue-on-error: true
+        run: pip-audit -r requirements-dev.txt -r model/requirements.txt -r api/requirements.txt
+
       - name: Unit tests
         run: pytest tests/ -q
 
