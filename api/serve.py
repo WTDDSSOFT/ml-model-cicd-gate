@@ -1,11 +1,17 @@
 """FastAPI serving layer for the trained digit classifier.
 
 Endpoints:
-  POST /predict  - classify an uploaded grayscale digit image
+  POST /predict  - classify an uploaded grayscale digit image (rate-limited, size-limited)
   GET  /health   - liveness/readiness probe used by health_check.py and Ansible
   GET  /metrics  - Prometheus exposition format, scraped by monitoring/prometheus.yml
+
+Deliberately does NOT use `from __future__ import annotations` (unlike the
+rest of this codebase): slowapi's @limiter.limit() decorator on /predict
+doesn't preserve enough of the wrapped function for FastAPI to resolve
+stringified (PEP 563) forward-referenced types like UploadFile, and fails
+at import time. Python 3.12's native generics (dict[str, object], str | None)
+don't need the future import anyway.
 """
-from __future__ import annotations
 
 import io
 import json
@@ -14,19 +20,46 @@ import sys
 from pathlib import Path
 
 import torch
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi.security import APIKeyHeader
 from PIL import Image
 from prometheus_client import Counter, Gauge, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "model"))
 from common import CLASS_NAMES, METRICS_PATH, MODEL_PATH, load_model  # noqa: E402
 
 MODEL_VERSION = os.environ.get("MODEL_VERSION", "dev")
+PREDICT_RATE_LIMIT = os.environ.get("PREDICT_RATE_LIMIT", "20/minute")
+PREDICT_MAX_UPLOAD_BYTES = int(os.environ.get("PREDICT_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
+# Unset by default so the docker-compose demo (Prometheus scrapes /metrics
+# with no auth headers) keeps working out of the box. Set this to require a
+# matching X-Metrics-Token header -- e.g. anywhere the endpoint is reachable
+# beyond a private network -- and configure Prometheus's scrape_config with
+# a matching `authorization: { credentials: ... }` block to match.
+METRICS_TOKEN = os.environ.get("METRICS_TOKEN", "")
 
 app = FastAPI(title="ml-model-cicd-gate API", version=MODEL_VERSION)
-Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+_metrics_token_header = APIKeyHeader(name="X-Metrics-Token", auto_error=False)
+
+
+def verify_metrics_token(token: str | None = Depends(_metrics_token_header)) -> None:
+    if METRICS_TOKEN and token != METRICS_TOKEN:
+        raise HTTPException(status_code=401, detail="missing or invalid X-Metrics-Token")
+
+
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", dependencies=[Depends(verify_metrics_token)]
+)
 
 # Static, set once at startup from the metrics.json the training/eval stage
 # produced -- this is a TRAINING-time number (held-out test set), not a
@@ -77,11 +110,19 @@ def health() -> dict[str, str]:
 
 
 @app.post("/predict")
-async def predict(file: UploadFile) -> dict[str, object]:
+@limiter.limit(PREDICT_RATE_LIMIT)
+async def predict(request: Request, file: UploadFile) -> dict[str, object]:
+    contents = await file.read()
+    if len(contents) > PREDICT_MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file is {len(contents)} bytes, exceeds limit of {PREDICT_MAX_UPLOAD_BYTES}",
+        )
+
     # Validate the input before touching the model, so a bad upload always
     # gets a 400 regardless of whether a model is currently loaded.
     try:
-        image = Image.open(io.BytesIO(await file.read()))
+        image = Image.open(io.BytesIO(contents))
     except Exception as exc:  # noqa: BLE001 - surface any decode failure as a 400
         raise HTTPException(status_code=400, detail=f"invalid image: {exc}") from exc
 
