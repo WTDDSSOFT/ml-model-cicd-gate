@@ -120,12 +120,14 @@ To see the gate actually block a bad model, drop the accuracy in `model/artifact
 
 ## Grafana dashboard
 
-Auto-provisioned from [`monitoring/grafana-dashboard.json`](monitoring/grafana-dashboard.json) on first boot — no manual import needed. Four panels, all backed by the API's own `/metrics` endpoint:
+Auto-provisioned from [`monitoring/grafana-dashboard.json`](monitoring/grafana-dashboard.json) on first boot — no manual import needed. Six panels, all backed by the API's own `/metrics` endpoint:
 
-- **API latency (p95)** — `histogram_quantile` over `http_request_duration_seconds`
-- **Error rate** — 5xx responses as a fraction of total requests
-- **Requests per second**, broken down by handler
-- **Deployed model accuracy** — a gauge (`ml_model_accuracy`) the API sets at startup from `metrics.json`, so the same number the CI gate checked is visible on the ops dashboard
+- **API latency (p95)** — `histogram_quantile` over `http_request_duration_seconds` (RED metric, via `prometheus-fastapi-instrumentator`)
+- **Error rate** — 5xx responses as a fraction of total requests (RED metric)
+- **Requests per second**, broken down by handler (RED metric)
+- **Shipped model accuracy** — a gauge (`ml_model_training_accuracy`) the API sets once at startup from `metrics.json`. This is a *training-time* number from the held-out test set, not a live production measurement — there's no ground truth to score live predictions against without a labeling pipeline, so don't read it as "how the model is doing right now."
+- **Predictions by class** — `ml_predictions_total`, a counter labeled by predicted digit, incremented on every `/predict` call. This and the panel below are the actual live ML-observability signals: what's being asked of the model and how it's answering, in production.
+- **Prediction confidence (p50/p95)** — `ml_prediction_confidence`, a histogram of the top-1 softmax probability per prediction. A sustained drop here (without a matching change in traffic pattern) is the practical early-warning signal for drift, since there's no live accuracy metric to watch directly.
 
 ## Connection to the AI postgraduate work
 

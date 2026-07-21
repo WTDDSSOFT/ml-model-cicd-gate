@@ -35,11 +35,11 @@
     },
     {
       "id": 3,
-      "title": "Deployed model accuracy",
+      "title": "Shipped model accuracy (training-time, not live)",
       "type": "stat",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
-        { "expr": "ml_model_accuracy", "legendFormat": "accuracy" }
+        { "expr": "ml_model_training_accuracy", "legendFormat": "accuracy" }
       ],
       "fieldConfig": {
         "defaults": {
@@ -68,6 +68,36 @@
         }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "title": "Predictions by class",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(ml_predictions_total[5m])) by (predicted_class)",
+          "legendFormat": "class {{predicted_class}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "title": "Prediction confidence (p50/p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(ml_prediction_confidence_bucket[5m])) by (le))",
+          "legendFormat": "p50 confidence"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ml_prediction_confidence_bucket[5m])) by (le))",
+          "legendFormat": "p95 confidence"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] }
     }
   ]
 }
