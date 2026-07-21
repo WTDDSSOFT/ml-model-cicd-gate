@@ -165,6 +165,16 @@ pipeline {
                         ? "smoke test failed for ${GIT_COMMIT_SHORT}, rolled back automatically"
                         : "${GIT_COMMIT_SHORT} deployed and passed smoke test"
                     sh "python scripts/notify.py --stage Notify --status ${status} --message '${message}'"
+
+                    if (!failed) {
+                        // Snapshot this build's metrics as the new production
+                        // baseline so the next build's Validate Metrics stage
+                        // can catch a regression, not just an absolute-threshold
+                        // failure. Lives in the Jenkins workspace, not git --
+                        // see scripts/model_gate.py for what happens when it's
+                        // missing (first build on a node, or a wiped workspace).
+                        sh 'cp model/artifacts/metrics.json model/artifacts/production_metrics.json'
+                    }
                 }
             }
         }

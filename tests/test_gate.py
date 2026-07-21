@@ -10,9 +10,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from model_gate import check_gate, load_metrics  # noqa: E402
+from model_gate import check_gate, check_regression, load_metrics  # noqa: E402
 
 THRESHOLD = 0.95
+REGRESSION_THRESHOLD = 0.01
 
 
 def test_check_gate_passes_above_threshold() -> None:
@@ -48,6 +49,26 @@ def test_load_metrics_missing_required_key_exits(tmp_path: Path) -> None:
     metrics_path.write_text(json.dumps({"accuracy": 0.97}))
     with pytest.raises(SystemExit):
         load_metrics(metrics_path)
+
+
+def test_check_regression_passes_when_no_drop() -> None:
+    baseline = {"accuracy": 0.97}
+    new = {"accuracy": 0.975}
+    assert check_regression(new, baseline, REGRESSION_THRESHOLD) == []
+
+
+def test_check_regression_passes_within_allowed_drop() -> None:
+    baseline = {"accuracy": 0.975}
+    new = {"accuracy": 0.970}  # drop of 0.005, under the 0.01 threshold
+    assert check_regression(new, baseline, REGRESSION_THRESHOLD) == []
+
+
+def test_check_regression_fails_on_significant_drop() -> None:
+    baseline = {"accuracy": 0.975}
+    new = {"accuracy": 0.95}  # drop of 0.025, still above the absolute 0.95 gate
+    failures = check_regression(new, baseline, REGRESSION_THRESHOLD)
+    assert len(failures) == 1
+    assert "regressed" in failures[0]
 
 
 def test_load_metrics_valid_file(tmp_path: Path) -> None:
