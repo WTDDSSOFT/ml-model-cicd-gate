@@ -78,12 +78,14 @@ def health() -> dict[str, str]:
 
 @app.post("/predict")
 async def predict(file: UploadFile) -> dict[str, object]:
-    model = get_model()
+    # Validate the input before touching the model, so a bad upload always
+    # gets a 400 regardless of whether a model is currently loaded.
     try:
         image = Image.open(io.BytesIO(await file.read()))
     except Exception as exc:  # noqa: BLE001 - surface any decode failure as a 400
         raise HTTPException(status_code=400, detail=f"invalid image: {exc}") from exc
 
+    model = get_model()
     tensor = _transform(image).unsqueeze(0)
     with torch.no_grad():
         logits = model(tensor)
