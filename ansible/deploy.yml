@@ -5,7 +5,13 @@
 #
 # Usage:
 #   ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
-#     -e app_tag=<commit_sha>
+#     -e app_tag=<commit_sha> [-e app_registry=registry.example.com/myorg]
+#
+# app_registry is unset by default (this portfolio has no real registry), in
+# which case the playbook deploys whatever image is already on the local
+# Docker daemon -- the same one that built it. Set it to pull explicitly
+# from a registry instead, matching how Jenkins' Push Image stage publishes
+# the image for real, separate deploy hosts to consume.
 - name: Blue-green deploy ml-model-cicd-gate API
   hosts: app_servers
   gather_facts: false
@@ -13,6 +19,12 @@
   vars:
     app_image: ml-model-cicd-gate-api
     app_tag: "{{ app_tag }}"
+    # Not declared with a self-referencing default here on purpose --
+    # app_registry is optional and only ever supplied as an extra-var
+    # (-e app_registry=...). Every usage below falls back with `| default('')`
+    # instead, since a `vars:` entry that reads its own (possibly-unset) name
+    # causes Ansible's Jinja resolver to recurse into itself.
+    full_image: "{{ (app_registry | default('') + '/' + app_image) if (app_registry | default('') | length > 0) else app_image }}:{{ app_tag }}"
     network_name: ml-model-net
     public_port: 8000
     blue_port: 18001
@@ -45,14 +57,20 @@
       ansible.builtin.set_fact:
         new_port: "{{ blue_port if new_color == 'blue' else green_port }}"
 
-    - name: "Report deploy plan: {{ current_color }} -> {{ new_color }} ({{ app_tag }})"
+    - name: "Report deploy plan: {{ current_color }} -> {{ new_color }} ({{ full_image }})"
       ansible.builtin.debug:
-        msg: "current={{ current_color }} new={{ new_color }} tag={{ app_tag }} port={{ new_port }}"
+        msg: "current={{ current_color }} new={{ new_color }} image={{ full_image }} port={{ new_port }}"
+
+    - name: Pull the image from the registry (only when app_registry is set)
+      community.docker.docker_image:
+        name: "{{ full_image }}"
+        source: pull
+      when: (app_registry | default('')) | length > 0
 
     - name: Start the new-color container
       community.docker.docker_container:
         name: "ml-model-api-{{ new_color }}"
-        image: "{{ app_image }}:{{ app_tag }}"
+        image: "{{ full_image }}"
         state: started
         recreate: true
         restart_policy: unless-stopped

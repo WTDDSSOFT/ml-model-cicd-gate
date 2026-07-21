@@ -4,7 +4,8 @@
 // lint, bad tests, bad metrics, bad image -- none of those should ever
 // reach a deploy). Stage 9 onward is different on purpose: a failed smoke
 // test does NOT abort the pipeline, it triggers an automatic rollback so
-// the pipeline always ends in a known-good, notified state.
+// the pipeline always ends in a known-good state -- but the build is
+// still marked UNSTABLE in that case, never a silent green.
 pipeline {
     agent any
 
@@ -20,6 +21,10 @@ pipeline {
         GIT_COMMIT_SHORT        = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
         MODEL_ACCURACY_THRESHOLD = '0.95'
         APP_PORT                = '8000'
+        // Unset by default: this portfolio project has no real registry.
+        // Set it on the Jenkins job (or -e REGISTRY_URL=...) to exercise
+        // the Push Image stage and the registry-pull path in Ansible.
+        REGISTRY_URL             = "${env.REGISTRY_URL ?: ''}"
     }
 
     stages {
@@ -38,7 +43,15 @@ pipeline {
 
         stage('Unit Tests') {
             steps {
-                sh 'pytest tests/ -q'
+                sh 'pytest tests/ -q --junitxml=test-results/junit.xml'
+            }
+            post {
+                // Publish whatever the suite produced even if it failed --
+                // a stage failure here still needs to show up in the test
+                // report, not just as a red pipeline stage.
+                always {
+                    junit testResults: 'test-results/junit.xml', allowEmptyResults: true
+                }
             }
         }
 
@@ -65,27 +78,51 @@ pipeline {
         }
 
         stage('Security Scan') {
+            // Mandatory, not advisory: if trivy isn't already on the agent,
+            // install it locally into the workspace instead of skipping the
+            // scan. Either way a CRITICAL/HIGH finding fails the build.
             steps {
-                // Falls back to a warning instead of failing the build when
-                // trivy isn't installed on the agent, so this Jenkinsfile
-                // stays runnable as documentation even without a full
-                // security-scanning toolchain wired up.
                 sh '''
-                    if command -v trivy >/dev/null 2>&1; then
-                        trivy image --exit-code 1 --severity CRITICAL,HIGH "${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
-                    else
-                        echo "trivy not installed on this agent -- skipping scan (would fail the build on CRITICAL/HIGH CVEs)"
+                    if ! command -v trivy >/dev/null 2>&1; then
+                        echo "trivy not found on this agent -- installing into ./.trivy-bin"
+                        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+                            | sh -s -- -b ./.trivy-bin
+                        export PATH="$PWD/.trivy-bin:$PATH"
                     fi
+                    trivy image --exit-code 1 --severity CRITICAL,HIGH "${IMAGE_NAME}:${GIT_COMMIT_SHORT}"
                 '''
+            }
+        }
+
+        stage('Push Image') {
+            // In a real deployment this is what makes the image reachable
+            // by the target hosts: ansible/deploy.yml's "pull" task fetches
+            // it from here rather than assuming it's already sitting on the
+            // same Docker daemon Jenkins just built it on. No registry is
+            // wired up for this portfolio project, so the stage is a no-op
+            // unless REGISTRY_URL is set on the job.
+            when {
+                expression { return REGISTRY_URL?.trim() }
+            }
+            steps {
+                sh """
+                    docker tag ${IMAGE_NAME}:${GIT_COMMIT_SHORT} ${REGISTRY_URL}/${IMAGE_NAME}:${GIT_COMMIT_SHORT}
+                    docker push ${REGISTRY_URL}/${IMAGE_NAME}:${GIT_COMMIT_SHORT}
+                """
             }
         }
 
         stage('Deploy') {
             // Blue-green: ansible/deploy.yml starts the new color, health-gates
             // it, and only then cuts traffic over -- the old color is never
-            // touched until the new one has proven itself.
+            // touched until the new one has proven itself. app_registry is
+            // only passed when Push Image actually ran; otherwise the
+            // playbook deploys the image it finds on the local daemon.
             steps {
-                sh "ansible-playbook -i ansible/inventory.ini ansible/deploy.yml -e app_tag=${GIT_COMMIT_SHORT}"
+                script {
+                    def registryArg = REGISTRY_URL?.trim() ? "-e app_registry=${REGISTRY_URL}" : ''
+                    sh "ansible-playbook -i ansible/inventory.ini ansible/deploy.yml -e app_tag=${GIT_COMMIT_SHORT} ${registryArg}"
+                }
             }
         }
 
@@ -109,6 +146,13 @@ pipeline {
             }
             steps {
                 sh "./scripts/rollback.sh ${IMAGE_NAME} ml-model-api ${APP_PORT}"
+                script {
+                    // rollback.sh already exited non-zero (failing this stage)
+                    // if it couldn't recover. Getting here means recovery
+                    // worked -- but a build that needed to roll back is not a
+                    // clean success and must never show green.
+                    currentBuild.result = 'UNSTABLE'
+                }
             }
         }
 
@@ -127,6 +171,11 @@ pipeline {
     }
 
     post {
+        always {
+            archiveArtifacts artifacts: 'model/artifacts/model.pt,model/artifacts/metrics.json',
+                              allowEmptyArchive: true,
+                              fingerprint: true
+        }
         failure {
             sh "python scripts/notify.py --stage Pipeline --status failure --message 'build ${env.BUILD_NUMBER} failed before deploy'"
         }
