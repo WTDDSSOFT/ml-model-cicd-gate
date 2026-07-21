@@ -61,6 +61,18 @@ pipeline {
             }
         }
 
+        stage('Evaluate Model') {
+            // Reloads the saved model.pt from disk and recomputes metrics.json
+            // against it -- this is what the gate actually scores, not the
+            // number train.py happened to compute in-memory before saving.
+            // They should agree (there's no dropout/batchnorm in DigitCNN to
+            // make them diverge), but the gate should validate the shipped
+            // artifact, not trust the training process's self-report.
+            steps {
+                sh 'python model/evaluate.py'
+            }
+        }
+
         stage('Validate Metrics') {
             // The gate: a build with a model below threshold never gets an
             // image, never gets deployed. This is this project's single

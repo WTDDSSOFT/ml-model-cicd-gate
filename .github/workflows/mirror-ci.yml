@@ -1,8 +1,8 @@
 name: mirror-ci
 
-# Mirrors the Jenkinsfile's lint/test/train/gate/build stages on GitHub's
-# infrastructure. Deploy stays Jenkins+Ansible-only -- this workflow exists
-# to prove the same gate holds on a second CI backend, not to replace it.
+# Mirrors the Jenkinsfile's lint/test/train/evaluate/gate/build stages on
+# GitHub's infrastructure. Deploy stays Jenkins+Ansible-only -- this workflow
+# exists to prove the same gate holds on a second CI backend, not to replace it.
 on:
   push:
     branches: [main]
@@ -30,6 +30,9 @@ jobs:
 
       - name: Train model
         run: python model/train.py
+
+      - name: Evaluate model
+        run: python model/evaluate.py
 
       - name: Validate model metrics (gate)
         run: python scripts/model_gate.py --threshold 0.95
