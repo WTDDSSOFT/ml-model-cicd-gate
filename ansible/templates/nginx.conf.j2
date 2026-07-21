@@ -1,0 +1,12 @@
+upstream ml_model_api {
+    server ml-model-api-{{ new_color }}:8000;
+}
+
+server {
+    listen 80;
+
+    location / {
+        proxy_pass http://ml_model_api;
+        proxy_set_header Host $host;
+    }
+}

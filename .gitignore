@@ -12,5 +12,8 @@ data/
 # Docker / logs
 *.log
 
+# Ansible
+ansible/collections/
+
 # OS
 .DS_Store

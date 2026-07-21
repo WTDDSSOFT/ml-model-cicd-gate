@@ -1,0 +1,139 @@
+---
+# Blue-green deploy: start the new version alongside the old one, gate the
+# traffic switch on a real health check, and only then tear the old one
+# down. The public port never stops serving traffic during a cutover.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory.ini ansible/deploy.yml \
+#     -e app_tag=<commit_sha>
+- name: Blue-green deploy ml-model-cicd-gate API
+  hosts: app_servers
+  gather_facts: false
+
+  vars:
+    app_image: ml-model-cicd-gate-api
+    app_tag: "{{ app_tag }}"
+    network_name: ml-model-net
+    public_port: 8000
+    blue_port: 18001
+    green_port: 18002
+    state_file: /tmp/ml_model_active_color
+    health_retries: 15
+    health_delay: 2
+    nginx_conf_dir: /tmp/ml-model-proxy-conf
+
+  tasks:
+    - name: Ensure the shared Docker network exists
+      community.docker.docker_network:
+        name: "{{ network_name }}"
+        state: present
+
+    - name: Read current active color, if any
+      ansible.builtin.stat:
+        path: "{{ state_file }}"
+      register: state_file_stat
+
+    - name: Load current active color
+      ansible.builtin.set_fact:
+        current_color: "{{ lookup('file', state_file) | trim if state_file_stat.stat.exists else 'none' }}"
+
+    - name: Decide the new color to deploy
+      ansible.builtin.set_fact:
+        new_color: "{{ 'green' if current_color == 'blue' else 'blue' }}"
+
+    - name: Compute the host port for the new color
+      ansible.builtin.set_fact:
+        new_port: "{{ blue_port if new_color == 'blue' else green_port }}"
+
+    - name: "Report deploy plan: {{ current_color }} -> {{ new_color }} ({{ app_tag }})"
+      ansible.builtin.debug:
+        msg: "current={{ current_color }} new={{ new_color }} tag={{ app_tag }} port={{ new_port }}"
+
+    - name: Start the new-color container
+      community.docker.docker_container:
+        name: "ml-model-api-{{ new_color }}"
+        image: "{{ app_image }}:{{ app_tag }}"
+        state: started
+        recreate: true
+        restart_policy: unless-stopped
+        networks:
+          - name: "{{ network_name }}"
+        published_ports:
+          - "{{ new_port }}:8000"
+        env:
+          MODEL_VERSION: "{{ app_tag }}"
+
+    - name: Health-gate the new-color container before it receives any traffic
+      block:
+        - name: Poll /health on the new-color container
+          ansible.builtin.uri:
+            url: "http://localhost:{{ new_port }}/health"
+            status_code: 200
+          register: health_result
+          until: health_result.status == 200
+          retries: "{{ health_retries }}"
+          delay: "{{ health_delay }}"
+      rescue:
+        - name: New-color container never became healthy, abort without touching live traffic
+          ansible.builtin.debug:
+            msg: "ABORT: ml-model-api-{{ new_color }} failed health check; old color '{{ current_color }}' is still live"
+
+        - name: Remove the failed new-color container
+          community.docker.docker_container:
+            name: "ml-model-api-{{ new_color }}"
+            state: absent
+
+        - name: Fail the play so Jenkins treats this as a failed deploy
+          ansible.builtin.fail:
+            msg: "blue-green deploy aborted: new version unhealthy, rollback.sh not needed because old version never stopped"
+
+    - name: Ensure the nginx config directory exists
+      ansible.builtin.file:
+        path: "{{ nginx_conf_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render nginx upstream config pointing at the new color
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: "{{ nginx_conf_dir }}/default.conf"
+        mode: "0644"
+
+    - name: Ensure the reverse proxy container is running
+      community.docker.docker_container:
+        name: ml-model-proxy
+        image: nginx:1.27-alpine
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: "{{ network_name }}"
+        published_ports:
+          - "{{ public_port }}:80"
+        volumes:
+          - "{{ nginx_conf_dir }}/default.conf:/etc/nginx/conf.d/default.conf:ro"
+      register: proxy_container
+
+    # docker_container only restarts on config-affecting changes it manages
+    # directly (image, ports, ...), not on the mounted file's contents
+    # changing underneath it, so force a reload whenever we re-render.
+    - name: Reload nginx to pick up the new upstream
+      community.docker.docker_container_exec:
+        container: ml-model-proxy
+        command: nginx -s reload
+      when: not proxy_container.changed
+
+    - name: Cutover traffic to the new color
+      ansible.builtin.copy:
+        content: "{{ new_color }}"
+        dest: "{{ state_file }}"
+        mode: "0644"
+
+    - name: Tear down the old-color container now that traffic is switched
+      community.docker.docker_container:
+        name: "ml-model-api-{{ current_color }}"
+        state: absent
+      when: current_color != 'none' and current_color != new_color
+
+    - name: "Deploy complete: {{ new_color }} ({{ app_tag }}) is live on port {{ public_port }}"
+      ansible.builtin.debug:
+        msg: "SUCCESS: ml-model-api-{{ new_color }} serving traffic through ml-model-proxy:{{ public_port }}"
