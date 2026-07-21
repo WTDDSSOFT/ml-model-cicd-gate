@@ -9,6 +9,8 @@ services:
       - "8000:8000"
     environment:
       MODEL_VERSION: ${MODEL_VERSION:-local-dev}
+    cap_drop: [ALL]
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v2.55.0
@@ -18,13 +20,15 @@ services:
       - "9090:9090"
     depends_on:
       - api
+    cap_drop: [ALL]
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:11.2.0
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: ${GF_AUTH_ANONYMOUS_ENABLED:-true}
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -33,3 +37,5 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+    cap_drop: [ALL]
+    restart: unless-stopped
