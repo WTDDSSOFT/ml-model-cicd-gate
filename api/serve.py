@@ -8,6 +8,7 @@ Endpoints:
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 from pathlib import Path
@@ -15,16 +16,23 @@ from pathlib import Path
 import torch
 from fastapi import FastAPI, HTTPException, UploadFile
 from PIL import Image
+from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
 from torchvision import transforms
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "model"))
-from common import CLASS_NAMES, MODEL_PATH, load_model  # noqa: E402
+from common import CLASS_NAMES, METRICS_PATH, MODEL_PATH, load_model  # noqa: E402
 
 MODEL_VERSION = os.environ.get("MODEL_VERSION", "dev")
 
 app = FastAPI(title="ml-model-cicd-gate API", version=MODEL_VERSION)
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+model_accuracy_gauge = Gauge(
+    "ml_model_accuracy", "Accuracy recorded for the currently deployed model at training/eval time"
+)
+if METRICS_PATH.exists():
+    model_accuracy_gauge.set(json.loads(METRICS_PATH.read_text())["accuracy"])
 
 _transform = transforms.Compose([
     transforms.Grayscale(num_output_channels=1),
