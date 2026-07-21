@@ -58,7 +58,7 @@ def evaluate(model: DigitCNN, loader: DataLoader) -> dict[str, float]:
         preds = model(images).argmax(dim=1)
         all_preds.extend(preds.tolist())
         all_labels.extend(labels.tolist())
-    accuracy = sum(p == l for p, l in zip(all_preds, all_labels)) / len(all_labels)
+    accuracy = sum(p == t for p, t in zip(all_preds, all_labels)) / len(all_labels)
     precision = precision_score(all_labels, all_preds, average="macro", zero_division=0)
     recall = recall_score(all_labels, all_preds, average="macro", zero_division=0)
     return {"accuracy": accuracy, "precision": precision, "recall": recall}
