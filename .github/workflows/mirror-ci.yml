@@ -1,0 +1,38 @@
+name: mirror-ci
+
+# Mirrors the Jenkinsfile's lint/test/train/gate/build stages on GitHub's
+# infrastructure. Deploy stays Jenkins+Ansible-only -- this workflow exists
+# to prove the same gate holds on a second CI backend, not to replace it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Unit tests
+        run: pytest tests/ -q
+
+      - name: Train model
+        run: python model/train.py
+
+      - name: Validate model metrics (gate)
+        run: python scripts/model_gate.py --threshold 0.95
+
+      - name: Build Docker image
+        run: docker build -t ml-model-cicd-gate-api:${{ github.sha }} --build-arg MODEL_VERSION=${{ github.sha }} .
