@@ -2,11 +2,11 @@
 
 **A CI/CD pipeline that safely deploys ML models the way automotive software demands: gated, tested, monitored, and reversible.**
 
-This repo trains a small image classifier and ships it through a pipeline that treats the model like any other production artifact: it doesn't get deployed unless it clears a quality gate, it doesn't take traffic unless it passes a health check, and if it fails after deploy, it rolls itself back automatically. The model (a digit classifier on MNIST) is deliberately simple — it's the payload moving through the pipeline, not the point of the project.
+This repo trains a small image classifier and ships it through a pipeline that treats the model like any other production artifact: it doesn't get deployed unless it clears a quality gate, it doesn't take traffic unless it passes a health check, and if it fails after deploy, it rolls itself back automatically. The model (a digit classifier on MNIST) is deliberately simple it's the payload moving through the pipeline, not the point of the project.
 
 ## Why this project exists
 
-Built as a portfolio piece for a **CI/CD Integration Engineer** role (Critical TechWorks / BMW). The job calls for Linux, Bash, Python, Git, custom automation tooling, Jenkins, Ansible, Zuul, Docker, GitHub, Prometheus, Grafana, and advanced deployment strategies (blue-green, canary, rolling). This project is a working demonstration of each of those, end to end, with a short honest note on the one item — Zuul — that doesn't fit a single-repo portfolio (see [below](#about-zuul)).
+Built as a portfolio piece for a **CI/CD Integration Engineer**. The job calls for Linux, Bash, Python, Git, custom automation tooling, Jenkins, Ansible, Zuul, Docker, GitHub, Prometheus, Grafana, and advanced deployment strategies (blue-green, canary, rolling). This project is a working demonstration of each of those, end to end, with a short honest note on the one item — Zuul — that doesn't fit a single-repo portfolio (see [below](#about-zuul)).
 
 | Requirement | Where it lives |
 |---|---|
